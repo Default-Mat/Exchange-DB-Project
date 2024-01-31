@@ -1,8 +1,11 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request
 import mysql.connector
 import collections
 import json
 import hashlib
+from datetime import date
+from datetime import datetime
+import time
 
 
 app = Flask(__name__)
@@ -165,7 +168,7 @@ def signup():
         address = request.json["address"]
         phone_number = request.json["phone_number"]
         bank_account_number = request.json["bank_account_number"]
-        registration_date = request.json["registration_date"]
+        registration_date = date.today()
 
         query = """INSERT INTO useraccount
         (username, password, firstname, lastname, email,
@@ -223,7 +226,7 @@ def delete_account():
         connection.close()
 
 
-@app.route('/change-password', method=['POST'])
+@app.route('/change-password', methods=['POST'])
 def change_password():
     try:
         connection = mysql.connector.connect(host='localhost',
@@ -249,7 +252,7 @@ def change_password():
             password_bytes = temp.encode('utf-8')
             hash_object = hashlib.sha256(password_bytes)
             new_password = hash_object.hexdigest()
-            update_query = 'UPDATE TABLE useraccount SET password = %s WHERE username = %s AND password = %s'
+            update_query = 'UPDATE useraccount SET password = %s WHERE username = %s AND password = %s'
             record = (new_password, username, old_password)
             cursor.execute(update_query, record)
             connection.commit()
@@ -257,6 +260,152 @@ def change_password():
 
     except mysql.connector.Error as error:
         return "Failed to update MySQL table {}".format(error)
+
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route('/create-wallet', methods=['POST'])
+def create_wallet():
+    try:
+        connection = mysql.connector.connect(host='localhost',
+                                             database='Exchange',
+                                             user='admin',
+                                             password='admin')
+        cursor = connection.cursor()
+        username = request.json['username']
+        temp = request.json['password']
+        password_bytes = temp.encode('utf-8')
+        hash_object = hashlib.sha256(password_bytes)
+        password = hash_object.hexdigest()
+
+        check_query = 'SELECT user_id FROM useraccount WHERE username = %s AND password = %s'
+        cursor.execute(check_query, (username, password))
+        result = cursor.fetchone()
+        if result is None:
+            return "Username or password is wrong"
+        else:
+            # inserts new digital wallet
+            user_id = result[0]
+            temp = request.json['wallet_pass']
+            password_bytes = temp.encode('utf-8')
+            hash_object = hashlib.sha256(password_bytes)
+            wallet_pass = hash_object.hexdigest()
+            insert_query = 'INSERT INTO digitalwallet (wallet_pass, user_id) VALUES (%s, %s)'
+            record = (wallet_pass, user_id)
+            cursor.execute(insert_query, record)
+            connection.commit()
+
+            # gets currency ids to insert initial balance for each currency of the new wallet
+            check_query = 'SELECT wallet_id FROM digitalwallet WHERE wallet_pass = %s AND user_id = %s'
+            cursor.execute(check_query, record)
+            wallet_id = cursor.fetchone()[0]
+            cursor.execute('SELECT currency_id FROM currency')
+            result = cursor.fetchall()
+            currency_ids = []
+            for i in result:
+                currency_ids.append(i[0])
+
+            insert_query = 'INSERT INTO currency_balance (wallet_id, currency_id, balance) VALUES (%s, %s, 0.0)'
+            for currency_id in currency_ids:
+                record = (wallet_id, currency_id)
+                cursor.execute(insert_query, record)
+                connection.commit()
+
+            return f"New wallet created! Your wallet id is {wallet_id}"
+
+    except mysql.connector.Error as error:
+        return "Failed to insert into MySQL table {}".format(error)
+
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route('/transaction', methods=['POST'])
+def transaction():
+    try:
+        connection = mysql.connector.connect(host='localhost',
+                                             database='Exchange',
+                                             user='admin',
+                                             password='admin')
+        cursor = connection.cursor()
+
+        trans_date = date.today()
+        temp = datetime.now()
+        trans_time = temp.strftime('%H:%M:%S')
+
+        market = request.json['market']
+        cursor.execute('SELECT market_id FROM market WHERE market_name = %s', (market,))
+        result = cursor.fetchone()
+        market_id = result[0]
+
+        username = request.json['username']
+        cursor.execute('SELECT user_id FROM useraccount WHERE username = %s', (username,))
+        result = cursor.fetchone()
+        user_id = result[0]
+
+        select_id = 'SELECT currency_id FROM currency WHERE currency_name = %s'
+        exchanged_currency_name = request.json['exchanged_currency']
+        cursor.execute(select_id, (exchanged_currency_name,))
+        result = cursor.fetchone()
+        exchanged_currency = result[0]
+
+        paid_with_currency_name = request.json['paid_with_currency']
+        cursor.execute(select_id, (paid_with_currency_name,))
+        result = cursor.fetchone()
+        paid_with_currency = result[0]
+
+        exchanged_amount = float(request.json['exchanged_amount'])
+
+        # calculates price based on exchange_rate in market
+        cursor.execute('SELECT first_currency, second_currency FROM market WHERE market_id = %s', (market_id,))
+        market_currencies = cursor.fetchone()
+        rate = 0.0
+        if exchanged_currency == market_currencies[0]:
+            cursor.execute('SELECT first_exchange_rate FROM market WHERE market_id = %s', (market_id,))
+            result = cursor.fetchone()
+            rate = result[0]
+        elif exchanged_currency == market_currencies[1]:
+            cursor.execute('SELECT second_exchange_rate FROM market WHERE market_id = %s', (market_id,))
+            result = cursor.fetchone()
+            rate = result[0]
+        price = exchanged_amount * float(rate)
+
+        wallet_id = request.json['wallet_id']
+
+        # checks if the user has enough balance
+        check_query = 'SELECT balance FROM currency_balance WHERE wallet_id = %s AND currency_id = %s'
+        cursor.execute(check_query, (wallet_id, paid_with_currency))
+        result = cursor.fetchone()
+        balance = float(result[0])
+        if balance < price:
+            return "Trade failed! You don't have enough balance!"
+
+        else:
+            # inserts transaction
+            insert_trans = """INSERT INTO markettransaction 
+            (date, time, market_id, user_id, exchanged_currency, exchanged_amount, paid_with_currency, price, wallet_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+            record = (trans_date, trans_time, market_id, user_id, exchanged_currency,
+                      exchanged_amount, paid_with_currency, price, wallet_id)
+            cursor.execute(insert_trans, record)
+            connection.commit()
+
+            # updates user's wallet currency balances
+            update_exchanged_balance = """UPDATE currency_balance SET balance = balance + %s
+                                            WHERE wallet_id = %s AND currency_id = %s"""
+            update_paid_balance = """UPDATE currency_balance SET balance = balance - %s
+                                            WHERE wallet_id = %s AND currency_id = %s"""
+            cursor.execute(update_exchanged_balance, (exchanged_amount, wallet_id, exchanged_currency))
+            connection.commit()
+            cursor.execute(update_paid_balance, (price, wallet_id, paid_with_currency))
+            connection.commit()
+            return "Trade was successful!"
+
+    except mysql.connector.Error as error:
+        return "Failed to operate on MySQL table {}".format(error)
 
     finally:
         cursor.close()
