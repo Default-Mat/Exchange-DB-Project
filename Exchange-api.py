@@ -5,7 +5,6 @@ import json
 import hashlib
 from datetime import date
 from datetime import datetime
-import time
 
 
 app = Flask(__name__)
@@ -32,6 +31,7 @@ def monthly_summery():
 
         cursor.execute(query)
         rows = cursor.fetchall()
+        # puts the data in json data type
         objects = []
         for row in rows:
             d = collections.OrderedDict()
@@ -63,24 +63,25 @@ def top5_traders():
                                              password='report')
         cursor = connection.cursor()
 
-        query = """SELECT useraccount.user_id, useraccount.firstname, useraccount.lastname,
+        query = """SELECT useraccount.username, useraccount.firstname, useraccount.lastname,
                     c1.currency_name, SUM(markettransaction.exchanged_amount) AS total_exchanged_amount
                     FROM useraccount, markettransaction, currency AS c1, currency AS c2
-                    WHERE useraccount.user_id = markettransaction.user_id 
+                    WHERE useraccount.username = markettransaction.username
                     AND markettransaction.exchanged_currency = c1.currency_id
                     AND markettransaction.paid_with_currency = c2.currency_id
                     AND c1.currency_name = "dollar" AND c2.currency_name = "toman"
                     AND YEAR(markettransaction.date) = "2022"
-                    GROUP BY useraccount.user_id, useraccount.firstname, useraccount.lastname, c1.currency_name
+                    GROUP BY useraccount.username, useraccount.firstname, useraccount.lastname, c1.currency_name
                     ORDER BY SUM(markettransaction.exchanged_amount) DESC
                     LIMIT 5"""
 
         cursor.execute(query)
         rows = cursor.fetchall()
+        # puts the data in json data type
         objects = []
         for row in rows:
             d = collections.OrderedDict()
-            d['user_id'] = row[0]
+            d['username'] = row[0]
             d['firstname'] = row[1]
             d['lastname'] = row[2]
             d['currency_name'] = row[3]
@@ -114,6 +115,7 @@ def login():
         hash_object = hashlib.sha256(password_bytes)
         password = hash_object.hexdigest()
 
+        # checks if the credentials are correct
         query = 'SELECT * FROM useraccount WHERE username = %s AND password = %s'
         record = (username, password)
         cursor.execute(query, record)
@@ -142,6 +144,7 @@ def signup():
         cursor = connection.cursor()
 
         username = request.json["username"]
+        # checks if the username already exists
         check_query = 'SELECT * FROM useraccount WHERE username = %s'
         cursor.execute(check_query, (username,))
         result = cursor.fetchone()
@@ -149,6 +152,7 @@ def signup():
             return f"Username {username} already exists! Try another"
 
         temp = request.json["password"]
+        # checks password length
         if len(temp) < 8:
             return "Your password must be at least 8 characters or digits"
         password_bytes = temp.encode('utf-8')
@@ -159,6 +163,7 @@ def signup():
         lastname = request.json["lastname"]
 
         email = request.json["email"]
+        # checks if the email already exists
         check_query = 'SELECT * FROM useraccount WHERE email = %s'
         cursor.execute(check_query, (email,))
         result = cursor.fetchone()
@@ -167,9 +172,18 @@ def signup():
 
         address = request.json["address"]
         phone_number = request.json["phone_number"]
+
         bank_account_number = request.json["bank_account_number"]
+        # checks if the bank account number already exists
+        check_query = 'SELECT * FROM useraccount WHERE bank_account_number = %s'
+        cursor.execute(check_query, (bank_account_number,))
+        result = cursor.fetchone()
+        if result is not None:
+            return f"bank-account number {bank_account_number} is already in use! Try another"
+
         registration_date = date.today()
 
+        # inserts new user account
         query = """INSERT INTO useraccount
         (username, password, firstname, lastname, email,
         address, phone_number, bank_account_number, registration_date)
@@ -206,6 +220,7 @@ def delete_account():
         hash_object = hashlib.sha256(password_bytes)
         password = hash_object.hexdigest()
 
+        # checks if the credentials are correct
         query = 'SELECT * FROM useraccount WHERE username = %s AND password = %s'
         record = (username, password)
         cursor.execute(query, record)
@@ -213,6 +228,7 @@ def delete_account():
         if result is None:
             return "Delete account failed! Wrong credentials"
         else:
+            # deletes the user account
             query = 'DELETE FROM useraccount WHERE username = %s AND password = %s'
             cursor.execute(query, record)
             connection.commit()
@@ -241,12 +257,14 @@ def change_password():
         hash_object = hashlib.sha256(password_bytes)
         old_password = hash_object.hexdigest()
 
+        # checks if the credentials are correct
         check_query = 'SELECT * FROM useraccount WHERE username = %s AND password = %s'
         cursor.execute(check_query, (username, old_password))
         result = cursor.fetchone()
         if result is None:
             return "Wrong password or username!"
 
+        # updates password
         else:
             temp = request.json["new_password"]
             password_bytes = temp.encode('utf-8')
@@ -274,33 +292,39 @@ def create_wallet():
                                              user='admin',
                                              password='admin')
         cursor = connection.cursor()
+
         username = request.json['username']
+
         temp = request.json['password']
         password_bytes = temp.encode('utf-8')
         hash_object = hashlib.sha256(password_bytes)
         password = hash_object.hexdigest()
 
-        check_query = 'SELECT user_id FROM useraccount WHERE username = %s AND password = %s'
+        check_query = 'SELECT * FROM useraccount WHERE username = %s AND password = %s'
         cursor.execute(check_query, (username, password))
         result = cursor.fetchone()
         if result is None:
             return "Username or password is wrong"
         else:
-            # inserts new digital wallet
-            user_id = result[0]
+            # checks if the wallet_id already exists
+            wallet_id = request.json['wallet_id']
+            cursor.execute('SELECT * FROM digitalwallet WHERE wallet_id = %s', (wallet_id,))
+            result = cursor.fetchone()
+            if result is not None:
+                return "The wallet id you entered already exists! Try another"
+
             temp = request.json['wallet_pass']
             password_bytes = temp.encode('utf-8')
             hash_object = hashlib.sha256(password_bytes)
             wallet_pass = hash_object.hexdigest()
-            insert_query = 'INSERT INTO digitalwallet (wallet_pass, user_id) VALUES (%s, %s)'
-            record = (wallet_pass, user_id)
+
+            # inserts new digital wallet
+            insert_query = 'INSERT INTO digitalwallet (wallet_id, wallet_pass, username) VALUES (%s, %s, %s)'
+            record = (wallet_id, wallet_pass, username)
             cursor.execute(insert_query, record)
             connection.commit()
 
             # gets currency ids to insert initial balance for each currency of the new wallet
-            check_query = 'SELECT wallet_id FROM digitalwallet WHERE wallet_pass = %s AND user_id = %s'
-            cursor.execute(check_query, record)
-            wallet_id = cursor.fetchone()[0]
             cursor.execute('SELECT currency_id FROM currency')
             result = cursor.fetchall()
             currency_ids = []
@@ -313,10 +337,100 @@ def create_wallet():
                 cursor.execute(insert_query, record)
                 connection.commit()
 
-            return f"New wallet created! Your wallet id is {wallet_id}"
+            return f"New wallet created!"
 
     except mysql.connector.Error as error:
         return "Failed to insert into MySQL table {}".format(error)
+
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route('/open-wallet', methods=['POST'])
+def open_wallet():
+    try:
+        connection = mysql.connector.connect(host='localhost',
+                                             database='Exchange',
+                                             user='report',
+                                             password='report')
+        cursor = connection.cursor()
+
+        wallet_id = request.json['wallet_id']
+
+        temp = request.json['wallet_pass']
+        password_bytes = temp.encode('utf-8')
+        hash_object = hashlib.sha256(password_bytes)
+        wallet_pass = hash_object.hexdigest()
+
+        # checks if the credentials are correct
+        check_query = 'SELECT * FROM digitalwallet WHERE wallet_id = %s AND wallet_pass = %s'
+        cursor.execute(check_query, (wallet_id, wallet_pass))
+        result = cursor.fetchone()
+        if result is None:
+            'Your wallet id or password is wrong'
+        else:
+            # fetches wallet's currencies and their balances
+            select_balance = """SELECT currency_balance.wallet_id, currency.currency_name, currency_balance.balance
+                                FROM currency_balance, currency
+                                WHERE currency_balance.currency_id = currency.currency_id
+                                AND currency_balance.wallet_id = %s"""
+            cursor.execute(select_balance, (wallet_id,))
+            rows = cursor.fetchall()
+            objects = []
+            for row in rows:
+                d = collections.OrderedDict()
+                d['wallet_id'] = row[0]
+                d['currency_name'] = row[1]
+                d['balance'] = row[2]
+                objects.append(d)
+
+            j = json.dumps(objects)
+            return j
+
+    except mysql.connector.Error as error:
+        return "Failed to select from MySQL table {}".format(error)
+
+    finally:
+        cursor.close()
+        connection.close()
+
+
+@app.route('/charge-wallet', methods=['POST'])
+def charge_wallet():
+    try:
+        connection = mysql.connector.connect(host='localhost',
+                                             database='Exchange',
+                                             user='admin',
+                                             password='admin')
+        cursor = connection.cursor()
+
+        wallet_id = request.json['wallet_id']
+
+        temp = request.json['wallet_pass']
+        password_bytes = temp.encode('utf-8')
+        hash_object = hashlib.sha256(password_bytes)
+        wallet_pass = hash_object.hexdigest()
+
+        charge_amount = request.json['charge_amount']
+
+        # checks if the credentials are correct
+        check_query = 'SELECT * FROM digitalwallet WHERE wallet_id = %s AND wallet_pass = %s'
+        cursor.execute(check_query, (wallet_id, wallet_pass))
+        result = cursor.fetchone()
+        if result is None:
+            'Your wallet id or password is wrong'
+        else:
+            # updates balance of toman currency
+            update_balance = """UPDATE currency_balance SET balance = %s
+                                WHERE currency_balance.currency_id =
+                                (SELECT currency_id FROM currency WHERE currency_name = "toman")"""
+            cursor.execute(update_balance, (float(charge_amount),))
+            connection.commit()
+            return "Your wallet charged successfully!"
+
+    except mysql.connector.Error as error:
+        return "Failed to update MySQL table {}".format(error)
 
     finally:
         cursor.close()
@@ -336,16 +450,15 @@ def transaction():
         temp = datetime.now()
         trans_time = temp.strftime('%H:%M:%S')
 
+        # fetches market id
         market = request.json['market']
         cursor.execute('SELECT market_id FROM market WHERE market_name = %s', (market,))
         result = cursor.fetchone()
         market_id = result[0]
 
         username = request.json['username']
-        cursor.execute('SELECT user_id FROM useraccount WHERE username = %s', (username,))
-        result = cursor.fetchone()
-        user_id = result[0]
 
+        # fetches currency id
         select_id = 'SELECT currency_id FROM currency WHERE currency_name = %s'
         exchanged_currency_name = request.json['exchanged_currency']
         cursor.execute(select_id, (exchanged_currency_name,))
@@ -360,17 +473,11 @@ def transaction():
         exchanged_amount = float(request.json['exchanged_amount'])
 
         # calculates price based on exchange_rate in market
-        cursor.execute('SELECT first_currency, second_currency FROM market WHERE market_id = %s', (market_id,))
-        market_currencies = cursor.fetchone()
-        rate = 0.0
-        if exchanged_currency == market_currencies[0]:
-            cursor.execute('SELECT first_exchange_rate FROM market WHERE market_id = %s', (market_id,))
-            result = cursor.fetchone()
-            rate = result[0]
-        elif exchanged_currency == market_currencies[1]:
-            cursor.execute('SELECT second_exchange_rate FROM market WHERE market_id = %s', (market_id,))
-            result = cursor.fetchone()
-            rate = result[0]
+        select_rate_query = """SELECT exchange_rate FROM currency_exchange_rate
+                                WHERE market_id = %s AND currency_id = %s"""
+        cursor.execute(select_rate_query, (market_id, exchanged_currency))
+        result = cursor.fetchone()
+        rate = result[0]
         price = exchanged_amount * float(rate)
 
         wallet_id = request.json['wallet_id']
@@ -386,9 +493,9 @@ def transaction():
         else:
             # inserts transaction
             insert_trans = """INSERT INTO markettransaction 
-            (date, time, market_id, user_id, exchanged_currency, exchanged_amount, paid_with_currency, price, wallet_id)
+            (date, time, market_id, username, exchanged_currency, exchanged_amount, paid_with_currency, price, wallet_id)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-            record = (trans_date, trans_time, market_id, user_id, exchanged_currency,
+            record = (trans_date, trans_time, market_id, username, exchanged_currency,
                       exchanged_amount, paid_with_currency, price, wallet_id)
             cursor.execute(insert_trans, record)
             connection.commit()
